@@ -75,41 +75,54 @@ export function isValidPackageJsonBuildConfig(
   }
   const packageJson = readJsonFile(packageJsonPath);
 
+  const outDir = tsConfig.options.outFile
+    ? dirname(tsConfig.options.outFile)
+    : tsConfig.options.outDir;
 
+  let resolvedOutDir: string | undefined;
+  if (outDir) {
+    const potentialOutDir = resolve(workspaceRoot, resolvedProjectPath, outDir);
+    const projectAbsolutePath = resolve(workspaceRoot, resolvedProjectPath);
+    const relativePath = relative(projectAbsolutePath, potentialOutDir);
 
-  // A path provided from either `exports` or `main`/`module` fields in package.json
-  // is considered a source file if it matches the include patterns in tsconfig
-  // or if it has a ts source file extension.
+    if (!relativePath.startsWith('..')) {
+      resolvedOutDir = potentialOutDir;
+    }
+  }
+
   const isPathSourceFile = (path: string): boolean => {
-    let pathToCheck: string;
-    if (isAbsolute(path)) {
-      const pathWithoutLeadingSlash = path.startsWith('/')
-        ? path.slice(1)
-        : path;
-      pathToCheck = resolve(workspaceRoot, pathWithoutLeadingSlash);
-    } else {
-      pathToCheck = resolve(workspaceRoot, resolvedProjectPath, path);
-    }
+    const normalizedPath = isAbsolute(path)
+      ? resolve(path)
+      : resolve(workspaceRoot, resolvedProjectPath, path);
 
-    const sourceExtensions = ['.ts', '.tsx', '.cts', '.mts'];
-
-    const include = tsConfig.raw?.include;
-    if (include && Array.isArray(include)) {
-      const projectAbsolutePath = resolve(workspaceRoot, resolvedProjectPath);
-      const relativeToProject = relative(projectAbsolutePath, pathToCheck);
-
-      for (const pattern of include) {
-        if (picomatch(pattern)(relativeToProject)) {
-          return true;
-        }
+    if (resolvedOutDir) {
+      // If the path is within the outDir, we assume it's not a source file.
+      const relativePath = relative(resolvedOutDir, normalizedPath);
+      if (!relativePath.startsWith('..')) {
+        return false;
       }
-
-      return false;
     }
 
-    // Fallback to checking the extension if no include patterns are defined.
-    const ext = extname(path);
-    return sourceExtensions.includes(ext);
+    // If no include patterns, TypeScript includes all TS files by default
+    const include = tsConfig.raw?.include;
+    if (!include || !Array.isArray(include)) {
+      const ext = extname(path);
+      const tsExtensions = ['.ts', '.tsx', '.cts', '.mts'];
+      if (tsExtensions.includes(ext)) {
+        return true;
+      }
+    }
+
+    const projectAbsolutePath = resolve(workspaceRoot, resolvedProjectPath);
+    const relativeToProject = relative(projectAbsolutePath, normalizedPath);
+
+    for (const pattern of include) {
+      if (picomatch(pattern)(relativeToProject)) {
+        return true;
+      }
+    }
+
+    return false;
   };
 
   const containsInvalidPath = (
